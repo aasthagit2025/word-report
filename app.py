@@ -10,126 +10,171 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("Open End Word Report Generator")
+st.title("Open End Report Generator")
 
 uploaded_file = st.file_uploader(
-    "Upload Excel or CSV",
+    "Upload Excel / CSV",
     type=["xlsx", "xls", "csv"]
 )
 
 if uploaded_file:
 
-    # Read file
     if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
     else:
         df = pd.read_excel(uploaded_file)
 
-    st.success(f"Loaded {len(df):,} records")
+    st.success(f"{len(df):,} records loaded")
 
-    st.subheader("Cover Page Details")
+    st.subheader("Cover Page")
 
     client_name = st.text_input(
         "Client Name",
-        value="BWH HOTELS"
+        "BWH HOTELS"
     )
 
     study_name = st.text_input(
         "Study Name",
-        value="2025 Member Survey"
+        "2025 Member Survey"
     )
 
     report_title = st.text_input(
         "Report Title",
-        value="Open End Comments"
+        "Open End Comments"
     )
 
-    brand_name = st.text_input(
+    segment_name = st.text_input(
         "Brand / Segment",
-        value="Surestay and Collections"
+        "Surestay and Collections"
     )
 
-    region = st.text_input(
+    region_name = st.text_input(
         "Region",
-        value="North America"
+        "North America"
     )
 
     footnote = st.text_input(
         "Footnote",
-        value="*SureStay Responses Highlighted in Blue"
+        "*SureStay Responses Highlighted in Blue"
     )
 
-    # Auto detect likely OE columns
-    suggested_cols = [
-        col for col in df.columns
-        if (
-            "comment" in col.lower()
-            or "open" in col.lower()
-            or "specify" in col.lower()
-            or col.upper().startswith("Q")
-        )
-    ]
+    st.subheader("Question Mapping")
 
-    st.subheader("Select Open-End Questions")
-
-    selected_questions = st.multiselect(
-        "Questions",
-        options=df.columns.tolist(),
-        default=suggested_cols
+    oe_column = st.selectbox(
+        "Open End Response Column",
+        df.columns
     )
 
-    if st.button("Generate Word Report"):
+    attribute_column = st.selectbox(
+        "Attribute / Service Column (optional)",
+        ["None"] + list(df.columns)
+    )
+
+    question_text = st.text_area(
+        "Question Text",
+        value="Q7 - Open End Comments"
+    )
+
+    if st.button("Generate Report"):
 
         doc = Document()
 
-        # ----------------------
         # COVER PAGE
-        # ----------------------
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        def center_text(text, bold=False):
+            p = doc.add_paragraph()
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 
-        run = p.add_run(client_name)
-        run.bold = True
-        run.font.size = Pt(18)
+            run = p.add_run(text)
+            run.bold = bold
+            run.font.size = Pt(12)
+
+        center_text(client_name, True)
+
+        doc.add_paragraph()
+
+        center_text(study_name)
 
         doc.add_paragraph()
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        p.add_run(study_name)
+        center_text(report_title)
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        p.add_run(report_title)
+        doc.add_paragraph()
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        p.add_run(brand_name)
+        center_text(segment_name)
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        p.add_run(region)
+        doc.add_paragraph()
+
+        center_text(region_name)
 
         doc.add_paragraph()
         doc.add_paragraph()
 
-        p = doc.add_paragraph()
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-
-        run = p.add_run(footnote)
-        run.italic = True
+        center_text(footnote)
 
         doc.add_page_break()
 
-        # ----------------------
-        # OPEN ENDS
-        # ----------------------
+        # ATTRIBUTE GROUPING
 
-        for question in selected_questions:
+        if attribute_column != "None":
+
+            grouped = df[
+                [attribute_column, oe_column]
+            ].copy()
+
+            grouped = grouped.dropna(
+                subset=[oe_column]
+            )
+
+            grouped[oe_column] = (
+                grouped[oe_column]
+                .astype(str)
+                .str.strip()
+            )
+
+            grouped = grouped[
+                grouped[oe_column] != ""
+            ]
+
+            for attr in grouped[attribute_column].dropna().unique():
+
+                subset = grouped[
+                    grouped[attribute_column] == attr
+                ]
+
+                p = doc.add_paragraph()
+
+                run = p.add_run(
+                    f"{question_text} {attr}"
+                )
+
+                run.bold = True
+                run.font.size = Pt(11)
+
+                for response in subset[
+                    oe_column
+                ]:
+
+                    p = doc.add_paragraph()
+
+                    run = p.add_run(
+                        f"➢ {response}"
+                    )
+
+                    run.font.size = Pt(10)
+
+                doc.add_paragraph()
+
+        else:
+
+            p = doc.add_paragraph()
+
+            run = p.add_run(question_text)
+
+            run.bold = True
 
             responses = (
-                df[question]
+                df[oe_column]
                 .dropna()
                 .astype(str)
                 .str.strip()
@@ -139,33 +184,25 @@ if uploaded_file:
                 responses != ""
             ]
 
-            if len(responses) == 0:
-                continue
-
-            doc.add_heading(question, level=2)
-
             for response in responses:
 
-                doc.add_paragraph(
-                    response,
-                    style="List Bullet"
+                p = doc.add_paragraph()
+
+                run = p.add_run(
+                    f"➢ {response}"
                 )
 
-            doc.add_paragraph()
-
-        # ----------------------
-        # DOWNLOAD
-        # ----------------------
+                run.font.size = Pt(10)
 
         buffer = BytesIO()
+
         doc.save(buffer)
+
         buffer.seek(0)
 
-        st.success("Report Generated Successfully")
-
         st.download_button(
-            label="Download Word Report",
-            data=buffer,
+            "Download Word Report",
+            buffer,
             file_name="Open_End_Report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
