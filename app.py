@@ -1,257 +1,148 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
+import io
 
-st.set_page_config(
-page_title="Open End Report Generator",
-layout="wide"
-)
+# --- Helper Functions for Word Styling ---
+def set_cell_background(cell, color_hex):
+    """Fills a table cell background with a specific HEX color."""
+    shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}"/>')
+    cell._tc.get_or_add_tcPr().append(shading_elm)
 
-st.title("Open End Comments Report Generator")
+def process_survey_to_docx(csv_file):
+    """Processes the uploaded CSV and returns a styled Word document in memory."""
+    # Read the uploaded CSV file
+    df = pd.read_csv(csv_file)
+    
+    # Initialize the Word document
+    doc = Document()
+    
+    # Set standard 1-inch margins
+    for section in doc.sections:
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1)
+        section.right_margin = Inches(1)
 
-uploaded_file = st.file_uploader(
-"Upload CSV or Excel File",
-type=["csv", "xlsx", "xls"]
-)
+    # 1. Add Header Content
+    title_p = doc.add_paragraph()
+    title_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run1 = title_p.add_run("BWH Hotels\n")
+    run1.font.name = 'Arial'
+    run1.font.size = Pt(16)
+    run1.font.bold = True
+    
+    run2 = title_p.add_run("2025 Member Survey, Open End Comments\n")
+    run2.font.name = 'Arial'
+    run2.font.size = Pt(14)
+    run2.font.bold = True
+    
+    run3 = title_p.add_run("Surestay and Collections, North America")
+    run3.font.name = 'Arial'
+    run3.font.size = Pt(12)
+    run3.font.italic = True
+    
+    # Note tag
+    note_p = doc.add_paragraph()
+    run_note = note_p.add_run("\n*SureStay Responses Highlighted in Blue")
+    run_note.font.name = 'Arial'
+    run_note.font.size = Pt(10)
+    run_note.font.italic = True
+    
+    # 2. Identify Target Columns dynamically
+    q7_columns = [col for col in df.columns if col.startswith("Q7 -")]
+    q8_column = "Q8 - Is there anything else you would like us to know? Any additional thoughts you would like to share are appreciated."
+    target_questions = q7_columns + ([q8_column] if q8_column in df.columns else [])
+    
+    # 3. Extract and build Word tables
+    for q_full_name in target_questions:
+        valid_responses = df[[q_full_name, 'Brand']].dropna(subset=[q_full_name])
+        valid_responses = valid_responses[valid_responses[q_full_name].astype(str).str.strip() != ""]
+        
+        if valid_responses.empty:
+            continue
+            
+        doc.add_paragraph("\n") 
+        q_p = doc.add_paragraph()
+        q_run = q_p.add_run(q_full_name)
+        q_run.font.name = 'Arial'
+        q_run.font.size = Pt(11)
+        q_run.font.bold = True
+        
+        # Create single-column table box
+        table = doc.add_table(rows=0, cols=1)
+        table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        table.autofit = False
+        
+        # Subtle horizontal dividers
+        tblPr = table._tbl.tblPr
+        borders = parse_xml(
+            '<w:tblBorders xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="E0E0E0"/>'
+            '</w:tblBorders>'
+        )
+        tblPr.append(borders)
+
+        for _, row in valid_responses.iterrows():
+            text_comment = str(row[q_full_name]).strip()
+            brand_type = str(row['Brand']).upper()
+            
+            row_cells = table.add_row().cells
+            cell = row_cells[0]
+            cell.width = Inches(6.5)
+            
+            p = cell.paragraphs[0]
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.line_spacing = 1.15
+            
+            text_run = p.add_run(text_comment)
+            text_run.font.name = 'Arial'
+            text_run.font.size = Pt(10)
+            
+            # Match Brand format (SureStay highlight logic)
+            if brand_type.startswith("SS"):
+                set_cell_background(cell, "E6F2FF") 
+                
+    # Save document to a BytesIO byte stream instead of a hard-drive path
+    docx_buffer = io.BytesIO()
+    doc.save(docx_buffer)
+    docx_buffer.seek(0)
+    return docx_buffer
+
+# --- Streamlit Web Interface UI ---
+st.set_page_config(page_title="Survey Response Converter", page_icon="📝", layout="centered")
+
+st.title("📝 Open-End Survey Comment Extractor")
+st.write("Upload your raw survey CSV file below to generate a formatted Word document formatted with standard spacing and brand highlights.")
+
+uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
 
 if uploaded_file is not None:
-
-```
-# Read File
-
-try:
-
-    if uploaded_file.name.lower().endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
-
-    st.success(f"{len(df):,} records loaded successfully")
-
-except Exception as e:
-
-    st.error(f"Error reading file: {e}")
-    st.stop()
-
-# Cover Page
-
-st.subheader("Cover Page Details")
-
-client_name = st.text_input(
-    "Client Name",
-    value="BWH HOTELS"
-)
-
-study_name = st.text_input(
-    "Study Name",
-    value="2025 Member Survey"
-)
-
-report_title = st.text_input(
-    "Report Title",
-    value="Open End Comments"
-)
-
-brand_group = st.text_input(
-    "Brand Group",
-    value="Surestay and Collections"
-)
-
-market = st.text_input(
-    "Market",
-    value="North America"
-)
-
-footnote = st.text_input(
-    "Footnote",
-    value="*SureStay Responses Highlighted in Blue"
-)
-
-st.subheader("Question Selection")
-
-# Find likely OE questions
-
-oe_columns = []
-
-for col in df.columns:
-
-    col_upper = str(col).upper()
-
-    if col_upper.startswith("Q7") or col_upper.startswith("Q8"):
-        oe_columns.append(col)
-
-if len(oe_columns) == 0:
-    oe_columns = list(df.columns)
-
-selected_questions = st.multiselect(
-    "Select Open End Questions",
-    options=oe_columns
-)
-
-highlight_blue = st.checkbox(
-    "Highlight SureStay Responses Blue",
-    value=True
-)
-
-if st.button("Generate Word Report"):
-
-    if len(selected_questions) == 0:
-
-        st.warning(
-            "Please select at least one open-end question."
-        )
-
-        st.stop()
-
-    doc = Document()
-
-    # Cover Page
-
-    def add_center_line(text, bold=False):
-
-        p = doc.add_paragraph()
-
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-
-        run = p.add_run(str(text))
-
-        run.bold = bold
-        run.font.name = "Arial"
-        run.font.size = Pt(12)
-
-    add_center_line(client_name, True)
-
-    doc.add_paragraph()
-
-    add_center_line(study_name)
-
-    doc.add_paragraph()
-
-    add_center_line(report_title)
-
-    doc.add_paragraph()
-
-    add_center_line(brand_group)
-
-    doc.add_paragraph()
-
-    add_center_line(market)
-
-    doc.add_paragraph()
-    doc.add_paragraph()
-
-    add_center_line(footnote)
-
-    doc.add_page_break()
-
-    # SureStay Brands
-
-    surestay_brands = [
-        "SSH",
-        "SSC",
-        "SSPL",
-        "SSP"
-    ]
-
-    # Report Sections
-
-    for question in selected_questions:
-
-        if question not in df.columns:
-            continue
-
-        if "Brand" in df.columns:
-
-            temp = df[
-                ["Brand", question]
-            ].copy()
-
-        else:
-
-            temp = df[
-                [question]
-            ].copy()
-
-            temp["Brand"] = ""
-
-        temp = temp.dropna(
-            subset=[question]
-        )
-
-        temp[question] = (
-            temp[question]
-            .astype(str)
-            .str.strip()
-        )
-
-        temp = temp[
-            temp[question] != ""
-        ]
-
-        if len(temp) == 0:
-            continue
-
-        # Question Heading
-
-        p = doc.add_paragraph()
-
-        run = p.add_run(question)
-
-        run.bold = True
-        run.font.name = "Arial"
-        run.font.size = Pt(11)
-
-        doc.add_paragraph()
-
-        # Responses
-
-        for _, row in temp.iterrows():
-
-            response = str(row[question])
-
-            brand = str(row["Brand"])
-
-            p = doc.add_paragraph()
-
-            run = p.add_run(
-                f"➢ {response}"
-            )
-
-            run.font.name = "Arial"
-            run.font.size = Pt(10)
-
-            if (
-                highlight_blue
-                and brand in surestay_brands
-            ):
-                run.font.color.rgb = RGBColor(
-                    0,
-                    0,
-                    255
+    st.success("File uploaded successfully!")
+    
+    # Process button
+    if st.button("Generate Word Document", type="primary"):
+        with st.spinner("Parsing data and rendering layout..."):
+            try:
+                # Run background generation
+                output_buffer = process_survey_to_docx(uploaded_file)
+                
+                st.balloons()
+                st.success("Your Word Document is ready!")
+                
+                # Expose file download interface to user browser
+                st.download_button(
+                    label="📥 Download Word Document (.docx)",
+                    data=output_buffer,
+                    file_name="BWH_2025_Member_Survey_Open_End_Comments.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-
-        doc.add_page_break()
-
-    # Download
-
-    output = BytesIO()
-
-    doc.save(output)
-
-    output.seek(0)
-
-    st.download_button(
-        label="Download Word Report",
-        data=output,
-        file_name="Open_End_Report.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
-
-    st.success(
-        "Word report generated successfully."
-    )
-```
+            except Exception as e:
+                st.error(f"An error occurred while compiling the document: {e}")
